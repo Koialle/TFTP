@@ -10,6 +10,8 @@ import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.SocketException;
+import java.net.UnknownHostException;
+import java.util.Arrays;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -36,23 +38,24 @@ public class ServeurSTF { // Classe de Tests des primitives receive and send
     
     private Exception exception = null;
     
-    public int ServeurSTF(String ip) 
+    public ServeurSTF(String ip) 
     {
         try {
             serverPort = 69;
             inetServerAddress = InetAddress.getByName(ip);
 
             ds = new DatagramSocket();
-            ds.setSoTimeout(TEMPO);
+//            ds.setSoTimeout(TEMPO);
         } catch (SocketException ex) {
             Logger.getLogger(ServeurSTF.class.getName()).log(Level.SEVERE, null, ex);
             code = -1;
-        } finally {
-            return code;
+        } catch (UnknownHostException ex) {
+            Logger.getLogger(ServeurSTF.class.getName()).log(Level.SEVERE, null, ex);
+            code = -6;
         }
     }
     
-    public int receivefile(String localFileName, String remoteFileName, String remoteAddr)
+    public int receiveFile(String localFileName, String remoteFileName)
     {
         try {
             // Create local file
@@ -85,46 +88,48 @@ public class ServeurSTF { // Classe de Tests des primitives receive and send
             
             // Recieve file
             int offset = 0;
-            int previousBlockNumber = 0;
+            int ackNumber = 0;
             byte[] data = new byte[BUFFER];
-            DatagramPacket recieveDatagram = new DatagramPacket(data, BUFFER);
+            DatagramPacket recieveDatagram;
+
             do {
                 // Recieve data
+                recieveDatagram = new DatagramPacket(data, BUFFER);
                 ds.receive(recieveDatagram);
                 data = recieveDatagram.getData();
 
                 // Get block number OR code error
-                String numberString = new String(data, 2, 2);
+                String numberString = new Byte(data[2]).intValue() + "" + new Byte(data[3]).intValue(); //((dataReceived[2] & 0xff) << 8) | (dataReceived[3] & 0xff);
                 int number = Integer.valueOf(numberString);
+                
+                System.out.print("Received packet "+number+" :");
 
                 // Read op code
                 if(data[1] == OP_DATA) {
-                    if (number != previousBlockNumber) {
-                        // Que faire ?
-                        System.out.print(new String(data));
-                    }
-                    previousBlockNumber = number;
 
-                    // Write data in file
-                    fos.write(data, offset, data.length);
-                    offset += data.length;
-                    
+                    System.out.println("DATA");
+                    if (number != ackNumber) { // Comparer au numéro d'ACK envoyé, et faire l'écriture seulement si ACK != data block number, else juste envoyer le ACK
+                        // Write data in file
+                        //byte[] d = Arrays.copyOfRange(data, 4, data.length);
+                        //fos.write(d, offset, d.length);
+                        fos.write(data, 4, data.length - 4);
+//                        offset += d.length;
+                        System.out.println("Write DATA "+number);
+                    }
+
                     // Create ACK request
-                    byte[] ack = new byte[4];
-                    // OP CODE
-                    ack[0] = zero;
-                    ack[1] = OP_ACK;
-                    // Block number
-                    ack[2] = data[2];
-                    ack[3] = data[3];
-                    
+                    byte[] ack = { 0, OP_ACK, data[2], data[3] };
+                    ackNumber = Integer.valueOf(new Byte(data[2]).intValue() + "" + new Byte(data[3]).intValue());
+
                     // Send ack datagram
-                    DatagramPacket ackDatagram = new DatagramPacket(ack, 4, inetServerAddress, serverPort);
+                    DatagramPacket ackDatagram = new DatagramPacket(ack, 4, inetServerAddress, recieveDatagram.getPort());
                     ds.send(ackDatagram);
+                    System.out.println("Send ACK "+number);
                 } else if(data[1] == OP_ERROR) {
+                    System.out.println("ERROR");
                     code = number;
                 }
-            } while (recieveDatagram.getLength() < BUFFER);
+            } while (recieveDatagram.getLength() == BUFFER);
             
             // Close local file
             fos.close();
