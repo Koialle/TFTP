@@ -20,9 +20,8 @@ import java.net.UnknownHostException;
  */
 public class ClientSTF
 {
-
     // TFTP OP CODE    
-    public static final byte OP_ZERO = 0;
+    private static final byte OP_ZERO = 0;
     private static final byte OP_RRQ = 1;
     private static final byte OP_WRQ = 2;
     private static final byte OP_DATA = 3;
@@ -30,11 +29,11 @@ public class ClientSTF
     private static final byte OP_ERROR = 5;
     
     // ERROR CODES
-    private static final int ERR_SOCKET = -1;
-    private static final int ERR_PACKET = -2;
-    private static final int ERR_TIMEOUT = -3;
-    private static final int ERR_FILEUNKNOWN = -4;
-    private static final int ERR_HOST = -5;
+    public static final int ERR_SOCKET = -1;
+    public static final int ERR_PACKET = -2;
+    public static final int ERR_TIMEOUT = -3;
+    public static final int ERR_FILEUNKNOWN = -4;
+    public static final int ERR_HOST = -5;
     
     public final int TEMPO = 10;
     public final int BUFFER = 512; // 512 + 4
@@ -158,7 +157,7 @@ public class ClientSTF
             }
             exception = ex;
         } finally {
-            return this.closeAll();
+            return this.close();
         }
     }
 
@@ -227,8 +226,18 @@ public class ClientSTF
             }
             exception = ex;
         } finally {
-            return this.closeAll();
+            return this.close();
         }
+    }
+    
+    public int getCode()
+    {
+        return code;
+    }
+    
+    public String getErrorMsg()
+    {
+        return errorMsg;
     }
     
     /**
@@ -257,7 +266,7 @@ public class ClientSTF
      * Closes the DatagramSocket and handles the returned response.
      * @return int code
      */
-    private int closeAll()
+    public int close()
     {
         ds.close();
         if (exception != null) {
