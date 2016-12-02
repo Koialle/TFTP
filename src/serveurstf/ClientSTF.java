@@ -1,6 +1,5 @@
 package serveurstf;
 
-import UnsignedHelper.UnsignedHelper;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -12,8 +11,6 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.SocketException;
 import java.net.UnknownHostException;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 
 /**
  *
@@ -21,7 +18,9 @@ import java.util.logging.Logger;
  * @author Mélanie DUBREUIL
  * 
  */
-public class ClientSTF {
+public class ClientSTF
+{
+
     // TFTP OP CODE    
     public static final byte OP_ZERO = 0;
     private static final byte OP_RRQ = 1;
@@ -47,7 +46,12 @@ public class ClientSTF {
     private int serverPort;
     public String mode = "octet";
     private Exception exception = null;
-    
+
+    /**
+     * Constructor.
+     * @param ip
+     * @param port 
+     */
     public ClientSTF(String ip, int port)
     {
         try {
@@ -65,71 +69,84 @@ public class ClientSTF {
                 code = ERR_PACKET;
             }
             errorMsg = "Return code : " + code + " [ " + ex.getClass() + " - " + ex.getMessage() + " ] ";
-            //Logger.getLogger(ClientSTF.class.getName()).log(Level.SEVERE, errorMsg);
-            System.out.println(errorMsg);
+            System.err.println(errorMsg);
         }
     }
     
+    /**
+     * Receive a file from a TFTP server.
+     * @param localFileName
+     * @param remoteFileName
+     * @return int code
+     */
     public int receiveFile(String localFileName, String remoteFileName)
     {
+        // Initialization
+        this.flush();
+        byte firstByte = 0;
+        int ackNumber = 0, dataSize;
+        byte[] data = new byte[BUFFER + 4];
+        File localFile = null;
+        FileOutputStream fos;
+        DatagramPacket recieveDatagram;
+
         try {
             // Create local file
-            File localFile = new File(localFileName);
-            FileOutputStream fos;
+            localFile = new File(localFileName);
             fos = new FileOutputStream(localFile);
 
             // Send Read request
             this.sendWriteOrSendRequest(remoteFileName, OP_RRQ);
-            
-            // Recieve file
-            int ackNumber = 0;
-            byte[] data = new byte[BUFFER + 4];
-            DatagramPacket recieveDatagram;
 
             do {
-                System.out.println("Waiting packet...");
                 // Recieve data
+                System.out.println("Waiting packet " + (ackNumber + 1));
                 recieveDatagram = new DatagramPacket(data, data.length);
                 ds.receive(recieveDatagram);
                 data = recieveDatagram.getData();
+                dataSize = recieveDatagram.getLength();
 
-                // Get block number OR code error
-                String numberString = new Byte(data[2]).intValue() + "" + new Byte(data[3]).intValue(); //((dataReceived[2] & 0xff) << 8) | (dataReceived[3] & 0xff);
-                byte[] numberBytes = {data[2], data[3]};
-                int number = (data[2] & 0xff << 8)|(data[3] & 0xff);//UnsignedHelper.twoBytesToInt(numberBytes);//Integer.valueOf(numberString);
-                
-                System.out.print("Received packet " + number + " : ");
+                // Get block packetNumber OR code error
+                int packetNumber = ((firstByte & 0xff) << 8)|(data[3] & 0xff);
+                if (255 == (data[3] & 0xff)) {
+                    firstByte++; // Incrementation of first byte when second byte equals 255, because it wasn't done automatically.
+                }
+                System.out.print("Received packet " + packetNumber + " : ");
 
                 // Read op code
-                if(data[1] == OP_DATA) {
-
-                    System.out.println("DATA size " + recieveDatagram.getLength());
-                    if (number != ackNumber) {
+                if (data[1] == OP_DATA) {
+                    System.out.println("DATA size " + dataSize + " octets");
+                    if (packetNumber == ackNumber + 1) {
                         // Write data in file
-                        fos.write(data, 4, data.length - 4);
-                        System.out.println("Write DATA " + number);
+                        fos.write(data, 4, dataSize - 4);
+                        System.out.println("Write DATA " + packetNumber);
                     }
 
                     // Create ACK request
-                    numberBytes = UnsignedHelper.intTo2UnsignedBytes(number);
-                    byte[] ack = { 0, OP_ACK, numberBytes[0], numberBytes[1] }; //(byte)(data[2]*256 & 255), (byte)(data[3] & 255)
-                    ackNumber = Integer.valueOf(new Byte(data[2]).intValue() + "" + new Byte(data[3]).intValue());
+                    ackNumber = packetNumber;
+                    System.out.println("Sending ACK " + ackNumber);
+                    byte[] ack = { 0, OP_ACK, (byte)(ackNumber / 256), (byte)(ackNumber % 256) };
 
                     // Send ack datagram
                     DatagramPacket ackDatagram = new DatagramPacket(ack, 4, inetServerAddress, recieveDatagram.getPort());
                     ds.send(ackDatagram);
-                    System.out.println("Send ACK " + number);
-                } else if(data[1] == OP_ERROR) {
-                    System.out.println("ERROR");
-                    code = number + 1;
-                    errorMsg = new String(data, 4, data.length - 5);
+                    System.out.println("Sended ACK ");
+                } else if (data[1] == OP_ERROR) {
+                    this.handleServerError(packetNumber, data);
+                    localFile.delete();
                     break;
                 }
-            } while (recieveDatagram.getLength() == (BUFFER + 4));
+            } while (dataSize == (BUFFER + 4));
             
             // Close local file
             fos.close();
         } catch (IOException ex) {
+            // Delete local corrupted file
+            if(localFile != null) {
+                localFile.delete();
+            }
+
+            // Handle exception
             if(ex instanceof InterruptedIOException) {
                 code = ERR_TIMEOUT;
             } else if(ex instanceof SocketException) {
@@ -141,81 +158,121 @@ public class ClientSTF {
             }
             exception = ex;
         } finally {
-            ds.close();
-            
-            if (exception != null) {
-                errorMsg = exception.getClass() + " - " + exception.getMessage();
-                //exception.printStackTrace();
-                Logger.getLogger(ClientSTF.class.getName()).log(Level.SEVERE, errorMsg);
-            }
-            System.out.println("Return code : " + code + " [ " + errorMsg + " ] ");
-
-            return code;
+            return this.closeAll();
         }
     }
 
-    public int sendFile(String localFileName) {
-        code = 0;
-        FileInputStream fileReader;        
+    /**
+     * Send a file to a TFTP server.
+     * @param localFileName
+     * @return int code
+     */
+    public int sendFile(String localFileName)
+    {  
+        // Initialisation
+        this.flush();
+        int blockNumber = 1, dataBlockSize = 0;
+        byte[] buffer = new byte[BUFFER];
+        FileInputStream fileReader;
+        DatagramPacket receivedAckPacket;
 
         try {
-            DatagramPacket receivedAckPacket;
-            byte[] buffer = new byte[BUFFER];
-            
-            // Opening the file
+            // Open local file
             fileReader = new FileInputStream(localFileName);
+            
+            // Send Write request
             this.sendWriteOrSendRequest(localFileName, OP_WRQ);
             
-            int blockNumber = 1;
-            int dataBlockSize = 0;
-            do { 
-                byte[] data = new byte[BUFFER];
-                System.out.println("Wait ACK");
-                receivedAckPacket = new DatagramPacket(data, BUFFER);
+            do {
+                // Receive Ack
+                System.out.println("Waiting ACK " + blockNumber);
+                byte[] dataReceived = new byte[BUFFER];
+                receivedAckPacket = new DatagramPacket(dataReceived, BUFFER);
                 ds.receive(receivedAckPacket);
 
-                int receivedPacketNumber = (int)(data[2]*256 & 255) + (int)(data[3] & 255);
-                byte[] opCode = { data[0], data[1] };
-                if (opCode[1] == OP_ACK) {
-                    System.out.println("ACK  : " + receivedPacketNumber);
-                    if (receivedPacketNumber == blockNumber - 1) {
+                // Get block packetNumber OR code error
+                int packetNumber = ((dataReceived[2] & 0xff) << 8)|(dataReceived[3] & 0xff);
+                if (dataReceived[1] == OP_ACK) {
+                    System.out.println("ACK  : " + packetNumber);
+                    if (packetNumber == blockNumber - 1) {
+                        // Read data to send
                         dataBlockSize = fileReader.read(buffer, 0, BUFFER);
                     }
-                    System.out.println("Size of Data to send :" + dataBlockSize);
+                    System.out.println("Size of Data to send : " + dataBlockSize);
+                    
+                    // Send data
+                    byte[] data;
                     if (dataBlockSize != -1) {
                         System.out.println("Send data : " + blockNumber);
-                        byte[] dataToSend = this.createDataPacket(buffer, dataBlockSize, blockNumber);
-                        ds.send(new DatagramPacket(dataToSend, dataToSend.length, inetServerAddress, receivedAckPacket.getPort()));
-                        blockNumber++;
+                        data = this.createDataPacket(buffer, dataBlockSize, blockNumber);
+                    } else {
+                        // In case of last the last datas send is of size 512, causing the server to wait event htough the file was entirely send.
+                        // It happened for us with a file of 8,50 Ko, the last packet send was of size 512 (+4 = 516), and so the server was waiting but we had no dataReceived to send anymore.
+                        System.out.println("Send last packet");
+                        data = this.createDataPacket(new byte[0], 0, blockNumber);
                     }
-                } else if (opCode[1] == OP_ERROR){
-                    System.out.println("ERROR");
-                    code = receivedPacketNumber + 1;
-                    errorMsg = new String(data, 4, data.length - 5);
+                    ds.send(new DatagramPacket(data, data.length, inetServerAddress, receivedAckPacket.getPort()));
+                    blockNumber++;
+                } else if (dataReceived[1] == OP_ERROR) {
+                    this.handleServerError(packetNumber, dataReceived);
                     break;
                 }
             } while(dataBlockSize != -1); // Tant qu'il y a des données à envoyer
+            
+            // Close local file
             fileReader.close();
         } catch (IOException ex) {
-            //Logger.getLogger(ClientSTF.class.getName()).log(Level.SEVERE, null, ex);
             if(ex instanceof FileNotFoundException) {
-                code = ERR_FILEUNKNOWN; // TODO
+                code = ERR_FILEUNKNOWN;
             }
             exception = ex;
         } finally {
-            ds.close();
-
-            if (exception != null) {
-                errorMsg = " [ " + exception.getClass() + " - " + exception.getMessage() + " ] ";
-                //exception.printStackTrace();
-            }
-            System.out.println("Return code : " + code + errorMsg);
-                    
-            return code;
+            return this.closeAll();
         }
     }
     
-    public void sendWriteOrSendRequest(String remoteFileName, byte opCode) throws IOException
+    /**
+     * Initalize all recurrent variables.
+     */
+    private void flush()
+    {
+        code = 0;
+        errorMsg = "";
+        exception = null;
+    }
+    
+    /**
+     * Handle server errors by traducing the code and getting the error message.
+     * @param errorCode Block number of the error packet
+     * @param data      Error packet content
+     */
+    private void handleServerError(int errorCode, byte[] data)
+    {
+        System.out.println("ERROR");
+        code = errorCode + 1;
+        errorMsg = new String(data, 4, data.length - 5);
+    }
+
+    /**
+     * Closes the DatagramSocket and handles the returned response.
+     * @return int code
+     */
+    private int closeAll()
+    {
+        ds.close();
+        if (exception != null) {
+            errorMsg = exception.getClass() + " - " + exception.getMessage();
+        }
+        if (!errorMsg.isEmpty()) {
+            System.err.println("Return code : " + code + " - " + errorMsg);
+        } else {
+            System.out.println("Return code : " + code);
+        }
+
+        return code;
+    }
+    
+    private void sendWriteOrSendRequest(String remoteFileName, byte opCode) throws IOException
     {
         // Packet : 2 OP_CODE bytes - n FILE NAME bytes - 1 ZERO byte - n FILE LENGTH bytes for - 1 ZERO byte
         int requestLength = 2 + remoteFileName.length() + 1 + mode.length() + 1;
@@ -238,23 +295,22 @@ public class ClientSTF {
         ds.send(new DatagramPacket(request, request.length, inetServerAddress, serverPort));
     }
     
-    private byte[] createDataPacket(byte[] byteRead, int length, int blockNumber){
-        byte[] data = new byte[4 + length];
-        System.out.println(data.length);
-        
+    private byte[] createDataPacket(byte[] byteRead, int length, int blockNumber)
+    {
         // Packet creation
+        byte[] data = new byte[4 + length];
         data[0] = OP_ZERO;
         data[1] = OP_DATA;
         data[2] = (byte)(blockNumber/256);
         data[3] = (byte)(blockNumber%256);
         
-        for(int position = 0 ; position < length; position++){
-            if (position >= data.length){
+        // Fill with dataReceived content
+        for(int i = 0 ; i < length; i++) {
+            if (i >= data.length) {
                 break;
             }
-            data[position + 4] = byteRead[position];
+            data[i + 4] = byteRead[i];
         }
-        //Arrays.copyOfRange(data, 4, data.length);
 
         return data;
     }
