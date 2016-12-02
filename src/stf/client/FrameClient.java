@@ -1,6 +1,4 @@
-package serveurstf;
-
-import javax.swing.JOptionPane;
+package stf.client;
 
 /**
  *

@@ -1,4 +1,4 @@
-package serveurstf;
+package stf.client;
 
 import java.io.File;
 import java.io.FileInputStream;
